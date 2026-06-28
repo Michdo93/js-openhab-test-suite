@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>js-openhab-test-suite · Test UI</title>
+
+<!-- openHAB REST client from CDN -->
+<script src="https://cdn.jsdelivr.net/gh/Michdo93/js-openhab-rest-client@main/openhab.min.js"></script>
+<!-- Test suite library -->
+<script src="openhab-test-suite.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:#0d1117; --surface:#161b22; --border:#30363d;
+    --accent:#f78166; --green:#3fb950; --yellow:#d29922;
+    --red:#f85149; --blue:#58a6ff; --purple:#bc8cff;
+    --text:#e6edf3; --muted:#8b949e;
+    --mono:'JetBrains Mono',monospace; --sans:'Inter',sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);
+       font-size:14px;height:100vh;display:grid;
+       grid-template-columns:260px 1fr;grid-template-rows:56px auto 1fr;overflow:hidden;}
+
+  /* ── Header ──────────────────────────────────────────────────────────────── */
+  header{grid-column:1/-1;background:var(--surface);border-bottom:1px solid var(--border);
+         display:flex;align-items:center;gap:12px;padding:0 20px;}
+  .logo{font-family:var(--mono);font-weight:700;font-size:14px;color:var(--accent);}
+  .logo span{color:var(--muted);font-weight:400;}
+  .badge{font-size:10px;padding:2px 7px;border-radius:4px;background:#1f1310;
+         color:var(--accent);border:1px solid var(--accent);font-family:var(--mono);}
+  .conn-wrap{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .conn-wrap label{font-size:11px;color:var(--muted);}
+  .conn-wrap input{background:var(--bg);border:1px solid var(--border);color:var(--text);
+    font-family:var(--mono);font-size:12px;padding:5px 9px;border-radius:6px;outline:none;}
+  .conn-wrap input:focus{border-color:var(--blue);}
+  #inp-url{width:200px;} #inp-user,#inp-pass{width:120px;} #inp-token{width:180px;}
+  .sep{width:1px;height:24px;background:var(--border);}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--red);transition:background .3s;}
+  .dot.ok{background:var(--green);}
+
+  /* ── CORS notice bar ─────────────────────────────────────────────────────── */
+  #cors-bar{grid-column:1/-1;background:#12140a;border-bottom:1px solid var(--border);
+    padding:7px 20px;font-size:11px;color:var(--yellow);display:flex;gap:8px;align-items:center;}
+  #cors-bar a{color:var(--blue);text-decoration:none;}
+  #cors-bar a:hover{text-decoration:underline;}
+
+  /* ── Sidebar ─────────────────────────────────────────────────────────────── */
+  nav{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:12px 0;}
+  .nav-section{padding:6px 14px 2px;font-size:10px;font-weight:600;
+    letter-spacing:.08em;color:var(--muted);text-transform:uppercase;}
+  .nav-item{display:flex;align-items:center;gap:8px;padding:6px 14px;cursor:pointer;
+    font-size:12px;font-family:var(--mono);transition:background .1s;user-select:none;}
+  .nav-item:hover{background:rgba(255,255,255,.04);}
+  .nav-item.active{background:rgba(247,129,102,.08);color:var(--accent);
+    border-left:2px solid var(--accent);padding-left:12px;}
+
+  /* ── Content ─────────────────────────────────────────────────────────────── */
+  .content{display:flex;flex-direction:column;overflow:hidden;}
+
+  /* ── Test form pane ──────────────────────────────────────────────────────── */
+  #form-pane{overflow-y:auto;max-height:55%;border-bottom:1px solid var(--border);
+    background:var(--surface);padding:14px 16px;display:flex;flex-direction:column;gap:10px;}
+  #pane-title{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--accent);}
+  #pane-desc{font-size:11px;color:var(--muted);}
+
+  .test-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:12px 14px;display:flex;flex-direction:column;gap:8px;}
+  .test-card-title{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue);}
+  .test-fields{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;}
+  .field{display:flex;flex-direction:column;gap:3px;}
+  .field label{font-size:10px;color:var(--muted);}
+  .field input,.field select{
+    background:var(--surface);border:1px solid var(--border);
+    color:var(--text);padding:5px 8px;border-radius:6px;
+    font-size:12px;font-family:var(--mono);outline:none;min-width:90px;}
+  .field input:focus,.field select:focus{border-color:var(--blue);}
+  .w-sm{width:90px;} .w-md{width:150px;} .w-lg{width:220px;} .w-xl{width:280px;}
+
+  .test-foot{display:flex;gap:8px;align-items:center;}
+  .result-badge{font-size:10px;padding:2px 9px;border-radius:10px;
+    font-family:var(--mono);font-weight:700;border:1px solid;}
+  .result-badge.pend{background:#1a1400;color:var(--yellow);border-color:var(--yellow);}
+  .result-badge.ok  {background:#0a1e0f;color:var(--green); border-color:var(--green);}
+  .result-badge.fail{background:#1e0a0a;color:var(--red);   border-color:var(--red);}
+
+  /* ── Stats + log ─────────────────────────────────────────────────────────── */
+  #stats-bar{display:flex;gap:16px;padding:7px 16px;border-bottom:1px solid var(--border);
+    font-size:12px;flex-shrink:0;align-items:center;}
+  .stat .n{font-weight:700;font-family:var(--mono);}
+  .stat.ok-s .n{color:var(--green);} .stat.fail-s .n{color:var(--red);}
+  .stat.pend-s .n{color:var(--yellow);}
+  .stat-label{color:var(--muted);}
+  #log{flex:1;overflow-y:auto;padding:10px 16px;font-family:var(--mono);
+    font-size:12px;line-height:1.7;}
+  .log-line{display:flex;gap:8px;margin-bottom:2px;}
+  .log-ts{color:var(--muted);font-size:11px;min-width:66px;}
+  .log-ok .icon{color:var(--green);} .log-fail .icon{color:var(--red);}
+  .log-info .icon{color:var(--blue);} .log-warn .icon{color:var(--yellow);}
+  .log-msg{word-break:break-all;white-space:pre-wrap;}
+  #progress{display:none;position:fixed;top:0;left:0;right:0;height:3px;
+    background:linear-gradient(90deg,var(--accent),var(--blue));
+    animation:prog 1.5s ease-in-out infinite;}
+  @keyframes prog{0%{transform:scaleX(0);transform-origin:left}
+                  100%{transform:scaleX(1);transform-origin:left}}
+
+  /* ── Buttons ─────────────────────────────────────────────────────────────── */
+  button{border:none;cursor:pointer;font-size:12px;font-weight:600;
+    padding:6px 14px;border-radius:6px;transition:opacity .15s;font-family:var(--sans);}
+  button:hover{opacity:.85;} button:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-connect{background:var(--accent);color:#0d1117;}
+  .btn-run{background:var(--blue);color:#0d1117;}
+  .btn-clear{background:transparent;color:var(--muted);border:1px solid var(--border);}
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">openHAB <span>·</span> test-suite</div>
+  <span class="badge">JavaScript</span>
+  <div class="conn-wrap">
+    <label>URL<input id="inp-url" type="text" value="https://myopenhab.org" placeholder="https://myopenhab.org"></label>
+    <label>User<input id="inp-user" type="text" placeholder="user@example.com"></label>
+    <label>Pass<input id="inp-pass" type="password" placeholder="••••••••"></label>
+    <div class="sep"></div>
+    <label>Token<input id="inp-token" type="text" placeholder="oh.openhab.xxx"></label>
+    <button class="btn-connect" id="btn-connect">Connect</button>
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text" style="font-size:12px;color:var(--muted)">Disconnected</span>
+  </div>
+</header>
+
+<!-- ── CORS notice ──────────────────────────────────────────────────────────── -->
+<div id="cors-bar">
+  ⚠ <strong>Local openHAB:</strong> enable CORS in openHAB
+  (<code>org.openhab.cors:enable=true</code>) and allow cross-origin requests in your browser.
+  <strong>myopenhab.org</strong> works without any CORS configuration.
+  <a href="https://github.com/Michdo93/js-openhab-rest-client#testing-with-openhab-cloud-or-a-local-instance" target="_blank">Learn more ↗</a>
+</div>
+
+<!-- ── Sidebar ─────────────────────────────────────────────────────────────── -->
+<nav id="sidebar">
+  <div style="padding:20px 14px;font-size:12px;color:var(--muted)">
+    Connect first, then pick a tester.
+  </div>
+</nav>
+
+<!-- ── Content ─────────────────────────────────────────────────────────────── -->
+<div class="content">
+  <div id="form-pane">
+    <div id="pane-title">js-openhab-test-suite</div>
+    <div id="pane-desc">Select a tester from the sidebar to get started.</div>
+  </div>
+
+  <div id="stats-bar">
+    <div class="stat"><span class="n" id="s-total">0</span><span class="stat-label"> Tests</span></div>
+    <div class="stat ok-s"><span class="n" id="s-ok">0</span><span class="stat-label"> ✓</span></div>
+    <div class="stat fail-s"><span class="n" id="s-fail">0</span><span class="stat-label"> ✗</span></div>
+    <div class="stat pend-s"><span class="n" id="s-pend">0</span><span class="stat-label"> ⏳</span></div>
+    <div style="margin-left:auto"><button class="btn-clear" id="btn-clear">✕ Clear log</button></div>
+  </div>
+
+  <div id="log"><div style="color:var(--muted);padding:4px 0">Select a tester to get started.</div></div>
+</div>
+
+<script>
+// ── Globals ────────────────────────────────────────────────────────────────────
+let client  = null;
+let stats   = { total:0, ok:0, fail:0, pend:0 };
+const { OpenHABClient } = openHAB;
+const { ItemTester, ThingTester, RuleTester,
+        ChannelTester, PersistenceTester, SitemapTester } = openHABTestSuite;
+
+// ── Log helpers ────────────────────────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const ts = () => new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+const icons = { ok:'✓', fail:'✗', info:'ℹ', warn:'⚠' };
+
+function log(type, msg) {
+  const log  = $('log');
+  const line = document.createElement('div');
+  line.className = `log-line log-${type}`;
+  line.innerHTML =
+    `<span class="log-ts">${ts()}</span>` +
+    `<span class="icon">${icons[type]||'·'}</span>` +
+    `<span class="log-msg">${String(msg).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function updateStats() {
+  $('s-total').textContent = stats.total;
+  $('s-ok').textContent    = stats.ok;
+  $('s-fail').textContent  = stats.fail;
+  $('s-pend').textContent  = stats.pend;
+}
+
+// ── Tester definitions ─────────────────────────────────────────────────────────
+const TESTERS = {
+  ItemTester: {
+    desc: 'Validates item existence, type, state and sends commands with SSE verification. The initial state is restored after each test.',
+    factory: c => new ItemTester(c),
+    methods: [
+      { name:'doesItemExist',
+        label:'Does Item Exist?',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'}],
+        call:(t,f) => t.doesItemExist(f.itemName) },
+      { name:'checkItemIsType',
+        label:'Check Item Is Type',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'},
+                {id:'itemType',label:'Type',type:'select',
+                 opts:['Switch','Dimmer','Color','Contact','Rollershutter',
+                       'Number','Player','DateTime','Location','Image','String','Group']}],
+        call:(t,f) => t.checkItemIsType(f.itemName,f.itemType) },
+      { name:'checkItemHasState',
+        label:'Check Item Has State',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'},
+                {id:'state',label:'Expected State',ph:'ON',cls:'w-sm'}],
+        call:(t,f) => t.checkItemHasState(f.itemName,f.state) },
+      { name:'testSwitch',
+        label:'Test Switch',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'},
+                {id:'command',label:'Command',type:'select',opts:['ON','OFF']},
+                {id:'expected',label:'Expected State',ph:'ON',cls:'w-sm'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testSwitch(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'testDimmer',
+        label:'Test Dimmer',
+        fields:[{id:'itemName',label:'Item Name',ph:'testDimmer',cls:'w-md'},
+                {id:'command',label:'Command',ph:'50',cls:'w-sm'},
+                {id:'expected',label:'Expected State',ph:'50',cls:'w-sm'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testDimmer(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'testColor',
+        label:'Test Color (HSB)',
+        fields:[{id:'itemName',label:'Item Name',ph:'testColor',cls:'w-md'},
+                {id:'command',label:'Command (H,S,B)',ph:'240,100,100',cls:'w-md'},
+                {id:'expected',label:'Expected State',ph:'240,100,100',cls:'w-md'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testColor(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'testContact',
+        label:'Test Contact',
+        fields:[{id:'itemName',label:'Item Name',ph:'testContact',cls:'w-md'},
+                {id:'update',label:'Update',type:'select',opts:['OPEN','CLOSED']},
+                {id:'expected',label:'Expected State',ph:'OPEN',cls:'w-sm'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testContact(f.itemName,f.update,f.expected||null,+f.timeout||10) },
+      { name:'testRollershutter',
+        label:'Test Rollershutter',
+        fields:[{id:'itemName',label:'Item Name',ph:'testRollershutter',cls:'w-md'},
+                {id:'command',label:'Command',type:'select',opts:['UP','DOWN','STOP','MOVE','0','50','100']},
+                {id:'expected',label:'Expected State',ph:'100',cls:'w-sm'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testRollershutter(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'testNumber',
+        label:'Test Number',
+        fields:[{id:'itemName',label:'Item Name',ph:'testNumber',cls:'w-md'},
+                {id:'command',label:'Value',ph:'42',cls:'w-sm'},
+                {id:'expected',label:'Expected State',ph:'42',cls:'w-sm'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testNumber(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'testPlayer',
+        label:'Test Player',
+        fields:[{id:'itemName',label:'Item Name',ph:'testPlayer',cls:'w-md'},
+                {id:'command',label:'Command',type:'select',opts:['PLAY','PAUSE','NEXT','PREVIOUS','REWIND','FASTFORWARD']},
+                {id:'expected',label:'Expected State',ph:'PLAY',cls:'w-sm'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testPlayer(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'testDateTime',
+        label:'Test DateTime',
+        fields:[{id:'itemName',label:'Item Name',ph:'testDateTime',cls:'w-md'},
+                {id:'command',label:'ISO-8601 Value',ph:'2024-01-15T08:30:00+0000',cls:'w-xl'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testDateTime(f.itemName,f.command,null,+f.timeout||10) },
+      { name:'testLocation',
+        label:'Test Location',
+        fields:[{id:'itemName',label:'Item Name',ph:'testLocation',cls:'w-md'},
+                {id:'update',label:'lat,lon[,alt]',ph:'48.7758,9.1829',cls:'w-lg'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testLocation(f.itemName,f.update,null,+f.timeout||10) },
+      { name:'testString',
+        label:'Test String',
+        fields:[{id:'itemName',label:'Item Name',ph:'testString',cls:'w-md'},
+                {id:'command',label:'Value',ph:'Hello openHAB',cls:'w-lg'},
+                {id:'expected',label:'Expected State',ph:'Hello openHAB',cls:'w-lg'},
+                {id:'timeout',label:'Timeout (s)',ph:'10',cls:'w-sm'}],
+        call:(t,f) => t.testString(f.itemName,f.command,f.expected||null,+f.timeout||10) },
+      { name:'isGroupItem',
+        label:'Is Group Item?',
+        fields:[{id:'itemName',label:'Item Name',ph:'testGroup',cls:'w-md'}],
+        call:(t,f) => t.isGroupItem(f.itemName) },
+      { name:'doesGroupContainMember',
+        label:'Group Contains Member?',
+        fields:[{id:'groupName',label:'Group Name',ph:'testGroup',cls:'w-md'},
+                {id:'memberName',label:'Member Name',ph:'testSwitch',cls:'w-md'}],
+        call:(t,f) => t.doesGroupContainMember(f.groupName,f.memberName) },
+    ]
+  },
+
+  ThingTester: {
+    desc: 'Checks Thing status (ONLINE / OFFLINE / …) and enables or disables Things.',
+    factory: c => new ThingTester(c),
+    methods: [
+      { name:'isThingOnline',
+        label:'Is Thing ONLINE?',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'}],
+        call:(t,f) => t.isThingOnline(f.uid) },
+      { name:'isThingOffline',
+        label:'Is Thing OFFLINE?',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'}],
+        call:(t,f) => t.isThingOffline(f.uid) },
+      { name:'isThingStatus',
+        label:'Check Thing Status',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'},
+                {id:'status',label:'Expected Status',type:'select',
+                 opts:['ONLINE','OFFLINE','PENDING','UNKNOWN','UNINITIALIZED','ERROR']}],
+        call:(t,f) => t.isThingStatus(f.uid,f.status) },
+      { name:'isThingError',
+        label:'Is Thing in ERROR?',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'}],
+        call:(t,f) => t.isThingError(f.uid) },
+      { name:'isThingUninitialized',
+        label:'Is Thing UNINITIALIZED?',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'}],
+        call:(t,f) => t.isThingUninitialized(f.uid) },
+      { name:'enableThing',
+        label:'Enable Thing',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'}],
+        call:(t,f) => t.enableThing(f.uid) },
+      { name:'disableThing',
+        label:'Disable Thing',
+        fields:[{id:'uid',label:'Thing UID',ph:'astro:sun:local',cls:'w-lg'}],
+        call:(t,f) => t.disableThing(f.uid) },
+    ]
+  },
+
+  RuleTester: {
+    desc: 'Runs, enables and disables rules; checks rule execution status.',
+    factory: c => new RuleTester(c),
+    methods: [
+      { name:'getRuleStatus',
+        label:'Get Rule Status',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:async(t,f)=>{ const s=await t.getRuleStatus(f.uid); return JSON.stringify(s); } },
+      { name:'isRuleActive',
+        label:'Is Rule Active?',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.isRuleActive(f.uid) },
+      { name:'isRuleDisabled',
+        label:'Is Rule Disabled?',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.isRuleDisabled(f.uid) },
+      { name:'isRuleRunning',
+        label:'Is Rule Running?',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.isRuleRunning(f.uid) },
+      { name:'isRuleIdle',
+        label:'Is Rule Idle?',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.isRuleIdle(f.uid) },
+      { name:'enableRule',
+        label:'Enable Rule',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.enableRule(f.uid) },
+      { name:'disableRule',
+        label:'Disable Rule',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.disableRule(f.uid) },
+      { name:'runRule',
+        label:'Run Rule Now',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'}],
+        call:(t,f) => t.runRule(f.uid) },
+      { name:'testRuleExecution',
+        label:'Test Rule Execution',
+        fields:[{id:'uid',label:'Rule UID',ph:'my-rule-1',cls:'w-lg'},
+                {id:'item',label:'Expected Item',ph:'testColor',cls:'w-md'},
+                {id:'value',label:'Expected Value',ph:'240,100,100',cls:'w-md'}],
+        call:(t,f) => t.testRuleExecution(f.uid,f.item,f.value) },
+    ]
+  },
+
+  ChannelTester: {
+    desc: 'Verifies item-channel links and detects orphaned links.',
+    factory: c => new ChannelTester(c),
+    methods: [
+      { name:'isItemLinkedToChannel',
+        label:'Is Item Linked to Channel?',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'},
+                {id:'channelUID',label:'Channel UID',ph:'astro:moon:local:phase#name',cls:'w-xl'}],
+        call:(t,f) => t.isItemLinkedToChannel(f.itemName,f.channelUID) },
+      { name:'getLinksForItem',
+        label:'Get All Links for Item',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'}],
+        call:async(t,f)=>{ const r=await t.getLinksForItem(f.itemName); return JSON.stringify(r); } },
+      { name:'isItemLinkedToAnyChannel',
+        label:'Is Item Linked to Any Channel?',
+        fields:[{id:'itemName',label:'Item Name',ph:'testSwitch',cls:'w-md'}],
+        call:(t,f) => t.isItemLinkedToAnyChannel(f.itemName) },
+      { name:'hasOrphanedLinks',
+        label:'Has Orphaned Links?',
+        fields:[],
+        call:(t)   => t.hasOrphanedLinks() },
+    ]
+  },
+
+  PersistenceTester: {
+    desc: 'Checks item registration in persistence services and historical data.',
+    factory: c => new PersistenceTester(c),
+    methods: [
+      { name:'isItemPersisted',
+        label:'Is Item Persisted?',
+        fields:[{id:'serviceId',label:'Service ID',ph:'rrd4j',cls:'w-sm'},
+                {id:'itemName', label:'Item Name',ph:'testSwitch',cls:'w-md'}],
+        call:(t,f) => t.isItemPersisted(f.serviceId,f.itemName) },
+      { name:'hasDataInRange',
+        label:'Has Data in Time Range?',
+        fields:[{id:'serviceId',label:'Service ID',ph:'rrd4j',cls:'w-sm'},
+                {id:'itemName', label:'Item Name',ph:'testSwitch',cls:'w-md'},
+                {id:'start',    label:'Start (ISO-8601)',ph:'2025-01-01T00:00:00.000Z',cls:'w-xl'},
+                {id:'end',      label:'End (ISO-8601)',  ph:'2025-12-31T23:59:59.999Z',cls:'w-xl'}],
+        call:(t,f) => t.hasDataInRange(f.serviceId,f.itemName,f.start,f.end) },
+      { name:'checkLastPersistedState',
+        label:'Check Last Persisted State',
+        fields:[{id:'serviceId',label:'Service ID',ph:'rrd4j',cls:'w-sm'},
+                {id:'itemName', label:'Item Name',ph:'testSwitch',cls:'w-md'},
+                {id:'expected', label:'Expected State',ph:'ON',cls:'w-sm'}],
+        call:(t,f) => t.checkLastPersistedState(f.serviceId,f.itemName,f.expected) },
+    ]
+  },
+
+  SitemapTester: {
+    desc: 'Verifies sitemap existence and checks whether items appear in sitemaps.',
+    factory: c => new SitemapTester(c),
+    methods: [
+      { name:'doesSitemapExist',
+        label:'Does Sitemap Exist?',
+        fields:[{id:'sitemapName',label:'Sitemap Name',ph:'default',cls:'w-md'}],
+        call:(t,f) => t.doesSitemapExist(f.sitemapName) },
+      { name:'doesSitemapContainItem',
+        label:'Does Sitemap Contain Item?',
+        fields:[{id:'sitemapName',label:'Sitemap Name',ph:'default',cls:'w-md'},
+                {id:'itemName',   label:'Item Name',ph:'testSwitch',cls:'w-md'}],
+        call:(t,f) => t.doesSitemapContainItem(f.sitemapName,f.itemName) },
+    ]
+  },
+};
+
+const SECTIONS = {
+  'Items':       ['ItemTester'],
+  'Things':      ['ThingTester'],
+  'Rules':       ['RuleTester'],
+  'Channels':    ['ChannelTester'],
+  'Persistence': ['PersistenceTester'],
+  'Sitemaps':    ['SitemapTester'],
+};
+
+// ── Connect ────────────────────────────────────────────────────────────────────
+$('btn-connect').addEventListener('click', async () => {
+  const url   = $('inp-url').value.trim().replace(/\/+$/,'');
+  const user  = $('inp-user').value.trim()  || null;
+  const pass  = $('inp-pass').value.trim()  || null;
+  const token = $('inp-token').value.trim() || null;
+
+  log('info', `Connecting to ${url}…`);
+  try {
+    client = new OpenHABClient(url, user, pass, token);
+    await client.login();
+
+    if (client.isLoggedIn) {
+      $('status-dot').className    = 'dot ok';
+      $('status-text').textContent = `Connected · ${client.isCloud ? 'Cloud' : 'Local'}`;
+      log('ok', `Connected — isCloud=${client.isCloud}`);
+      buildSidebar();
+    } else {
+      log('fail', 'Login failed — check credentials');
+      $('status-dot').className = 'dot';
+    }
+  } catch(e) {
+    log('fail', `Error: ${e.message}`);
+  }
+});
+
+// ── Sidebar ────────────────────────────────────────────────────────────────────
+function buildSidebar() {
+  const nav = $('sidebar');
+  nav.innerHTML = '';
+  for (const [section, names] of Object.entries(SECTIONS)) {
+    const sec = document.createElement('div');
+    sec.innerHTML = `<div class="nav-section">${section}</div>`;
+    for (const name of names) {
+      const item = document.createElement('div');
+      item.className   = 'nav-item';
+      item.textContent = name;
+      item.addEventListener('click', () => {
+        document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        buildFormPane(name);
+      });
+      sec.appendChild(item);
+    }
+    nav.appendChild(sec);
+  }
+}
+
+// ── Form pane ──────────────────────────────────────────────────────────────────
+function buildFormPane(testerName) {
+  const tester = TESTERS[testerName];
+  const pane   = $('form-pane');
+  pane.innerHTML = `
+    <div id="pane-title">${testerName}</div>
+    <div id="pane-desc">${tester.desc}</div>
+  `;
+
+  for (const method of tester.methods) {
+    const card  = document.createElement('div');
+    card.className = 'test-card';
+
+    const title = document.createElement('div');
+    title.className   = 'test-card-title';
+    title.textContent = method.label;
+    card.appendChild(title);
+
+    const fieldWrap = document.createElement('div');
+    fieldWrap.className = 'test-fields';
+    const fieldMap  = {};
+
+    for (const f of method.fields) {
+      const wrap = document.createElement('div'); wrap.className = 'field';
+      const lbl  = document.createElement('label'); lbl.textContent = f.label;
+      let el;
+      if (f.type === 'select') {
+        el = document.createElement('select');
+        f.opts.forEach(o => {
+          const opt = document.createElement('option');
+          opt.value = o; opt.textContent = o; el.appendChild(opt);
+        });
+      } else {
+        el = document.createElement('input');
+        el.type = 'text'; el.placeholder = f.ph || '';
+        if (f.cls) el.className = f.cls;
+      }
+      fieldMap[f.id] = el;
+      wrap.appendChild(lbl); wrap.appendChild(el);
+      fieldWrap.appendChild(wrap);
+    }
+
+    // Run button + badge
+    const badge  = document.createElement('span');
+    badge.className   = 'result-badge pend';
+    badge.textContent = '–';
+
+    const runBtn = document.createElement('button');
+    runBtn.className   = 'btn-run';
+    runBtn.textContent = '▶ Run';
+
+    runBtn.addEventListener('click', async () => {
+      if (!client) { log('warn','Not connected'); return; }
+      const vals   = {};
+      for (const [k, el] of Object.entries(fieldMap)) vals[k] = el.value.trim();
+      const testerInst = tester.factory(client);
+
+      badge.className   = 'result-badge pend'; badge.textContent = '⏳';
+      stats.pend++; updateStats();
+      $('progress').style.display = 'block';
+
+      try {
+        const rawResult = await method.call(testerInst, vals);
+        stats.pend--; stats.total++;
+
+        const isBool = typeof rawResult === 'boolean';
+        const ok     = isBool ? rawResult : true;
+
+        if (ok) { stats.ok++;   badge.className = 'result-badge ok';   badge.textContent = isBool ? '✓ true'  : '✓'; }
+        else    { stats.fail++; badge.className = 'result-badge fail'; badge.textContent = '✗ false'; }
+
+        const display = isBool
+          ? `${testerName}.${method.name}() → ${rawResult}`
+          : `${testerName}.${method.name}() → ${rawResult}`;
+        log(ok ? 'ok' : 'fail', display);
+      } catch(e) {
+        stats.pend--; stats.total++; stats.fail++;
+        badge.className   = 'result-badge fail'; badge.textContent = '✗ error';
+        log('fail', `${testerName}.${method.name}(): ${e.message}`);
+      }
+      updateStats();
+      $('progress').style.display = 'none';
+    });
+
+    const foot = document.createElement('div');
+    foot.className = 'test-foot';
+    foot.appendChild(runBtn);
+    foot.appendChild(badge);
+    card.appendChild(fieldWrap);
+    card.appendChild(foot);
+    pane.appendChild(card);
+  }
+}
+
+// ── Clear log ──────────────────────────────────────────────────────────────────
+$('btn-clear').addEventListener('click', () => {
+  $('log').innerHTML = '';
+  stats = { total:0, ok:0, fail:0, pend:0 };
+  updateStats();
+  document.querySelectorAll('.result-badge').forEach(b => {
+    b.className = 'result-badge pend'; b.textContent = '–';
+  });
+});
+</script>
+</body>
+</html>
