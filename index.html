@@ -137,9 +137,13 @@
 
 <!-- ── CORS notice ──────────────────────────────────────────────────────────── -->
 <div id="cors-bar">
-  ⚠ <strong>Local openHAB:</strong> enable CORS in openHAB
-  (<code>org.openhab.cors:enable=true</code>) and allow cross-origin requests in your browser.
-  <strong>myopenhab.org</strong> works without any CORS configuration.
+  ⚠ <strong>Browser-only limitation:</strong> neither <strong>myopenhab.org</strong>
+  nor most local openHAB instances send <code>Access-Control-Allow-Origin</code> headers,
+  so direct browser requests are blocked by CORS regardless of credentials.
+  For a <strong>local</strong> instance you can enable CORS yourself
+  (<code>org.openhab.cors:enable=true</code> in <code>services/runtime.cfg</code>),
+  but <strong>myopenhab.org cannot be reached from the browser at all</strong> — use the
+  Python/Java/C#/C++/C test suite backends instead, which proxy the request server-side.
   <a href="https://github.com/Michdo93/js-openhab-rest-client#testing-with-openhab-cloud-or-a-local-instance" target="_blank">Learn more ↗</a>
 </div>
 
