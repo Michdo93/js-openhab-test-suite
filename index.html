@@ -8,7 +8,7 @@
 <!-- openHAB REST client from CDN -->
 <script src="https://cdn.jsdelivr.net/gh/Michdo93/js-openhab-rest-client@main/openhab.min.js"></script>
 <!-- Test suite library -->
-<script src="https://cdn.jsdelivr.net/gh/Michdo93/js-openhab-test-suite@main/openhab-test-suite.min.js"></script>
+<script src="openhab-test-suite.js"></script>
 
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
@@ -172,7 +172,10 @@
 // ── Globals ────────────────────────────────────────────────────────────────────
 let client  = null;
 let stats   = { total:0, ok:0, fail:0, pend:0 };
-const { OpenHABClient } = openHAB;
+// NOTE: openhab.js already declares a top-level `class OpenHABClient`.
+// Re-declaring it via destructuring would throw a SyntaxError
+// ("redeclaration of let OpenHABClient"), so we alias it instead.
+const { OpenHABClient: OpenHABClientCtor } = openHAB;
 const { ItemTester, ThingTester, RuleTester,
         ChannelTester, PersistenceTester, SitemapTester } = openHABTestSuite;
 
@@ -468,7 +471,7 @@ $('btn-connect').addEventListener('click', async () => {
 
   log('info', `Connecting to ${url}…`);
   try {
-    client = new OpenHABClient(url, user, pass, token);
+    client = new OpenHABClientCtor(url, user, pass, token);
     await client.login();
 
     if (client.isLoggedIn) {
