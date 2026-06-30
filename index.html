@@ -124,7 +124,7 @@
   <div class="logo">openHAB <span>·</span> test-suite</div>
   <span class="badge">JavaScript</span>
   <div class="conn-wrap">
-    <label>URL<input id="inp-url" type="text" value="https://myopenhab.org" placeholder="https://myopenhab.org"></label>
+    <label>URL<input id="inp-url" type="text" value="https://myopenhab.org" placeholder="http://192.168.0.5:8080 or https://myopenhab.org"></label>
     <label>User<input id="inp-user" type="text" placeholder="user@example.com"></label>
     <label>Pass<input id="inp-pass" type="password" placeholder="••••••••"></label>
     <div class="sep"></div>
@@ -476,8 +476,24 @@ const SECTIONS = {
 };
 
 // ── Connect ────────────────────────────────────────────────────────────────────
+
+/**
+ * Ensures the URL has an explicit protocol. Without it, the browser
+ * resolves a bare host like "192.168.0.5:8080" as a path RELATIVE to
+ * the current page (e.g. "https://michdo93.github.io/js-openhab-test-suite/192.168.0.5/rest/")
+ * instead of as an absolute URL, causing a misleading 404.
+ */
+function normalizeUrl(raw) {
+  let url = raw.trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(url)) {
+    // Local IPs / hostnames default to http:// (openHAB is rarely TLS-terminated locally)
+    url = 'http://' + url;
+  }
+  return url;
+}
+
 $('btn-connect').addEventListener('click', async () => {
-  const url   = $('inp-url').value.trim().replace(/\/+$/,'');
+  const url   = normalizeUrl($('inp-url').value);
   const user  = $('inp-user').value.trim()  || null;
   const pass  = $('inp-pass').value.trim()  || null;
   const token = $('inp-token').value.trim() || null;
