@@ -176,8 +176,17 @@ let stats   = { total:0, ok:0, fail:0, pend:0 };
 // Re-declaring it via destructuring would throw a SyntaxError
 // ("redeclaration of let OpenHABClient"), so we alias it instead.
 const { OpenHABClient: OpenHABClientCtor } = openHAB;
-const { ItemTester, ThingTester, RuleTester,
-        ChannelTester, PersistenceTester, SitemapTester } = openHABTestSuite;
+// NOTE: openhab-test-suite.js already declares top-level classes
+// ItemTester, ThingTester, etc. — destructuring under the same names
+// would throw "Identifier has already been declared", so we alias them.
+const {
+  ItemTester:        ItemTesterCtor,
+  ThingTester:        ThingTesterCtor,
+  RuleTester:         RuleTesterCtor,
+  ChannelTester:      ChannelTesterCtor,
+  PersistenceTester:  PersistenceTesterCtor,
+  SitemapTester:      SitemapTesterCtor,
+} = openHABTestSuite;
 
 // ── Log helpers ────────────────────────────────────────────────────────────────
 const $  = id => document.getElementById(id);
@@ -207,7 +216,7 @@ function updateStats() {
 const TESTERS = {
   ItemTester: {
     desc: 'Validates item existence, type, state and sends commands with SSE verification. The initial state is restored after each test.',
-    factory: c => new ItemTester(c),
+    factory: c => new ItemTesterCtor(c),
     methods: [
       { name:'doesItemExist',
         label:'Does Item Exist?',
@@ -307,7 +316,7 @@ const TESTERS = {
 
   ThingTester: {
     desc: 'Checks Thing status (ONLINE / OFFLINE / …) and enables or disables Things.',
-    factory: c => new ThingTester(c),
+    factory: c => new ThingTesterCtor(c),
     methods: [
       { name:'isThingOnline',
         label:'Is Thing ONLINE?',
@@ -344,7 +353,7 @@ const TESTERS = {
 
   RuleTester: {
     desc: 'Runs, enables and disables rules; checks rule execution status.',
-    factory: c => new RuleTester(c),
+    factory: c => new RuleTesterCtor(c),
     methods: [
       { name:'getRuleStatus',
         label:'Get Rule Status',
@@ -389,7 +398,7 @@ const TESTERS = {
 
   ChannelTester: {
     desc: 'Verifies item-channel links and detects orphaned links.',
-    factory: c => new ChannelTester(c),
+    factory: c => new ChannelTesterCtor(c),
     methods: [
       { name:'isItemLinkedToChannel',
         label:'Is Item Linked to Channel?',
@@ -413,7 +422,7 @@ const TESTERS = {
 
   PersistenceTester: {
     desc: 'Checks item registration in persistence services and historical data.',
-    factory: c => new PersistenceTester(c),
+    factory: c => new PersistenceTesterCtor(c),
     methods: [
       { name:'isItemPersisted',
         label:'Is Item Persisted?',
@@ -438,7 +447,7 @@ const TESTERS = {
 
   SitemapTester: {
     desc: 'Verifies sitemap existence and checks whether items appear in sitemaps.',
-    factory: c => new SitemapTester(c),
+    factory: c => new SitemapTesterCtor(c),
     methods: [
       { name:'doesSitemapExist',
         label:'Does Sitemap Exist?',
