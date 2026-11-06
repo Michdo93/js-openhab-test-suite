@@ -1,617 +1,629 @@
 /**
  * js-openhab-test-suite
- * ─────────────────────
- * Browser-side test suite for openHAB, powered by js-openhab-rest-client.
- * Mirrors the Python openhab-test-suite: same class names, same method names.
  *
- * All methods return Promise<boolean> unless noted.
- * SSE-based tests (testSwitch, testDimmer, …) open a ReadableStream internally
- * and time out after `timeoutSec` seconds.
+ * Tests for openHAB items, things, rules, links, persistence and sitemaps in the browser.
+ * Mirrors openhab-test-suite (Python): same classes, same methods, same parameters.
+ * All check and test methods resolve to true or false.
  *
- * Usage:
- *   const client    = new OpenHABClient("https://myopenhab.org", "user", "pass");
- *   const itemTest  = new ItemTester(client);
- *   const ok        = await itemTest.testSwitch("MySwitch", "ON", "ON", 10);
+ *   <script src="openhab.min.js"></script>              <!-- js-openhab-rest-client >= 2.0.0 -->
+ *   <script src="openhab-test-suite.min.js"></script>
+ *   <script>
+ *     const client = new OpenHABClient("http://openhab:8080", null, null, "oh.token…");
+ *     const ok = await new ItemTester(client).testSwitch("Wohnzimmer_Licht", "ON", "ON", 10);
+ *   </script>
+ *
+ * The testers are available globally and under window.openHABTestSuite.
+ *
+ * @license MIT
+ * @version 2.0.0
  */
-
+(function () {
 "use strict";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function _parseJson(raw) {
-  if (!raw) return null;
-  if (typeof raw === "object") return raw;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-async function _parseResponse(rawOrPromise) {
-  const raw = rawOrPromise instanceof Promise ? await rawOrPromise : rawOrPromise;
-  return _parseJson(raw);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ItemTester
-// ─────────────────────────────────────────────────────────────────────────────
-
-class ItemTester {
-  constructor(client) {
-    this._items      = new Items(client);
-    this._itemEvents = new ItemEvents(client);
+function createTestSuite(lib) {
+  const { Items, ItemEvents, Things, Rules, Links, Persistence, Sitemaps, iterSSEEvents } = lib;
+  if (!Items || !iterSSEEvents) {
+    throw new Error("js-openhab-test-suite needs js-openhab-rest-client >= 2.0.0");
   }
 
-  // ── Static validators ──────────────────────────────────────────────────────
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  static isValidSwitchValue(v) {
-    return typeof v === "string" && ["ON","OFF"].includes(v.trim().toUpperCase());
+  /** true for the { error: "…" } objects of js-openhab-rest-client */
+  function isError(result) {
+    return result !== null && typeof result === "object" && !Array.isArray(result) && "error" in result;
   }
-  static isValidContactValue(v) {
-    return typeof v === "string" && ["OPEN","CLOSED"].includes(v.trim().toUpperCase());
-  }
-  static isValidDimmerValue(v) {
-    if (!v) return false;
-    const u = String(v).trim().toUpperCase();
-    if (["ON","OFF","INCREASE","DECREASE"].includes(u)) return true;
-    const n = parseFloat(u);
-    return !isNaN(n) && n >= 0 && n <= 100;
-  }
-  static isValidRollershutterValue(v) {
-    if (!v) return false;
-    const u = String(v).trim().toUpperCase();
-    if (["UP","DOWN","STOP","MOVE"].includes(u)) return true;
-    const n = parseFloat(u);
-    return !isNaN(n) && n >= 0 && n <= 100;
-  }
-  static isValidColorValue(v) {
-    if (!v) return false;
-    const u = String(v).trim().toUpperCase();
-    if (["ON","OFF","INCREASE","DECREASE"].includes(u)) return true;
-    const parts = String(v).trim().split(",");
-    if (parts.length === 3) {
-      const [h,s,b] = parts.map(Number);
-      return !isNaN(h)&&!isNaN(s)&&!isNaN(b) &&
-             h>=0&&h<=360 && s>=0&&s<=100 && b>=0&&b<=100;
+
+  function asObject(result) {
+    if (result === null || result === undefined || isError(result)) return {};
+    if (typeof result === "string") {
+      try { const parsed = JSON.parse(result); return parsed && typeof parsed === "object" ? parsed : {}; }
+      catch { return {}; }
     }
-    return false;
-  }
-  static isValidPlayerValue(v) {
-    return typeof v === "string" &&
-      ["PLAY","PAUSE","NEXT","PREVIOUS","REWIND","FASTFORWARD"]
-        .includes(v.trim().toUpperCase());
-  }
-  static isValidNumberValue(v) {
-    if (v == null) return false;
-    return /^-?\d+(\.\d+)?(\s+\S+)?$/.test(String(v).trim());
-  }
-  static isValidDateTimeValue(v) {
-    return typeof v === "string" &&
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.test(v.trim());
-  }
-  static isValidLocationValue(v) {
-    if (!v) return false;
-    const parts = String(v).trim().split(",");
-    if (parts.length < 2 || parts.length > 3) return false;
-    const lat = parseFloat(parts[0]), lon = parseFloat(parts[1]);
-    return !isNaN(lat)&&!isNaN(lon) && lat>=-90&&lat<=90 && lon>=-180&&lon<=180;
-  }
-  static isValidImageValue(v) {
-    return typeof v === "string" &&
-      (v.startsWith("http://") || v.startsWith("https://") ||
-       /^data:image\/[a-zA-Z+]+;base64,/.test(v));
+    return typeof result === "object" ? result : {};
   }
 
-  // ── Public API ─────────────────────────────────────────────────────────────
-
-  async doesItemExist(itemName) {
-    try {
-      const item = await _parseResponse(this._items.getItem(itemName));
-      if (item && item.name === itemName) return true;
-    } catch {}
-    console.error(`Error: The item '${itemName}' does not exist!`);
-    return false;
+  function asList(result) {
+    if (Array.isArray(result)) return result;
+    if (typeof result === "string") {
+      try { const parsed = JSON.parse(result); return Array.isArray(parsed) ? parsed : []; }
+      catch { return []; }
+    }
+    return [];
   }
 
-  async checkItemIsType(itemName, itemType) {
-    const valid = ["Color","Contact","DateTime","Dimmer","Group","Image",
-                   "Location","Number","Player","Rollershutter","String","Switch"];
-    if (!valid.includes(itemType)) {
-      console.error(`Error: '${itemType}' is not a valid item type.`);
+  /** expected may be a single value or an array/Set of accepted values */
+  function matches(state, expected) {
+    if (expected instanceof Set) expected = [...expected];
+    if (Array.isArray(expected)) return expected.some(e => String(state) === String(e));
+    return String(state) === String(expected);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ItemTester
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  const VALID_TYPES = ["Color", "Contact", "DateTime", "Dimmer", "Group", "Image",
+                       "Location", "Number", "Player", "Rollershutter", "String", "Switch"];
+
+  class ItemTester {
+    constructor(client) {
+      this.client = client;
+      this.itemsAPI = new Items(client);
+      this.itemEventsAPI = new ItemEvents(client);
+    }
+
+    // ── Command validators ───────────────────────────────────────────────────
+
+    static isValidSwitchValue(value) {
+      return typeof value === "string" && ["ON", "OFF"].includes(value.trim().toUpperCase());
+    }
+
+    static isValidContactValue(value) {
+      return typeof value === "string" && ["OPEN", "CLOSED"].includes(value.trim().toUpperCase());
+    }
+
+    static _isPercent(value) {
+      const text = String(value).trim();
+      if (!/^-?\d+(\.\d+)?$/.test(text)) return false;
+      const number = Number(text);
+      return number >= 0 && number <= 100;
+    }
+
+    static isValidDimmerValue(value) {
+      if (value === null || value === undefined) return false;
+      const v = String(value).trim().toUpperCase();
+      return ["ON", "OFF", "INCREASE", "DECREASE"].includes(v) || ItemTester._isPercent(v);
+    }
+
+    static isValidRollershutterValue(value) {
+      if (value === null || value === undefined) return false;
+      const v = String(value).trim().toUpperCase();
+      return ["UP", "DOWN", "STOP", "MOVE"].includes(v) || ItemTester._isPercent(v);
+    }
+
+    /** ON, OFF, INCREASE, DECREASE or "H,S,B" with H 0–360, S and B 0–100 */
+    static isValidColorValue(value) {
+      if (typeof value !== "string") return false;
+      if (["ON", "OFF", "INCREASE", "DECREASE"].includes(value.trim().toUpperCase())) return true;
+      const parts = value.trim().split(",");
+      if (parts.length !== 3 || parts.some(p => p.trim() === "" || isNaN(Number(p)))) return false;
+      const [h, s, b] = parts.map(Number);
+      return h >= 0 && h <= 360 && s >= 0 && s <= 100 && b >= 0 && b <= 100;
+    }
+
+    static isValidPlayerValue(value) {
+      return typeof value === "string" &&
+        ["PLAY", "PAUSE", "NEXT", "PREVIOUS", "REWIND", "FASTFORWARD"].includes(value.trim().toUpperCase());
+    }
+
+    /** a number, optionally followed by a unit: "20", "20.5", "20 °C", "100 %" */
+    static isValidNumberValue(value) {
+      if (value === null || value === undefined) return false;
+      return /^-?\d+(\.\d+)?(\s+\S+)?$/.test(String(value).trim());
+    }
+
+    /** ISO 8601, e.g. "2024-01-15T08:30:00+0000" or "2024-01-15T08:30:00.000Z" */
+    static isValidDateTimeValue(value) {
+      return typeof value === "string" &&
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.test(value.trim());
+    }
+
+    /** "lat,lon" or "lat,lon,alt" */
+    static isValidLocationValue(value) {
+      if (typeof value !== "string") return false;
+      const parts = value.trim().split(",");
+      if (parts.length < 2 || parts.length > 3 || parts.some(p => p.trim() === "" || isNaN(Number(p)))) return false;
+      const [lat, lon] = parts.map(Number);
+      return lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
+    }
+
+    static isValidStringValue(value) {
+      return value !== null && value !== undefined;
+    }
+
+    /** http/https URL or data:image/…;base64, URI */
+    static isValidImageValue(value) {
+      if (typeof value !== "string") return false;
+      const v = value.trim();
+      return v.startsWith("http://") || v.startsWith("https://") || /^data:image\/[a-zA-Z+]+;base64,/.test(v);
+    }
+
+    // ── Checks ───────────────────────────────────────────────────────────────
+
+    async doesItemExist(itemName) {
+      const item = asObject(await this.itemsAPI.getItem(itemName));
+      if (item.name === itemName) return true;
+      console.error(`Error: The item '${itemName}' does not exist!`);
       return false;
     }
-    try {
-      const item   = await _parseResponse(this._items.getItem(itemName));
-      if (!item) { console.error(`Error: item '${itemName}' not found.`); return false; }
-      const actual = item.type || "";
-      const base   = actual.includes(":") ? actual.split(":")[0] : actual;
-      if (base === itemType) return true;
-      console.error(`Error: '${itemName}' is type '${actual}', expected '${itemType}'.`);
-    } catch (e) {
-      console.error(`Error checking type of '${itemName}': ${e.message}`);
-    }
-    return false;
-  }
 
-  async checkItemHasState(itemName, expected) {
-    try {
-      const state = await this._items.getItemState(itemName);
-      return String(state) === String(expected);
-    } catch { return false; }
-  }
-
-  async isGroupItem(itemName) { return this.checkItemIsType(itemName, "Group"); }
-
-  async getGroupMembers(groupName) {
-    try {
-      const item = await _parseResponse(this._items.getItem(groupName, { recursive: true }));
-      return item?.members || [];
-    } catch (e) {
-      console.error(`Error reading group '${groupName}': ${e.message}`);
-      return [];
-    }
-  }
-
-  async doesGroupContainMember(groupName, memberName) {
-    const members = await this.getGroupMembers(groupName);
-    return members.some(m => m.name === memberName);
-  }
-
-  async checkGroupMemberState(groupName, memberName, expectedState) {
-    const members = await this.getGroupMembers(groupName);
-    const m       = members.find(m => m.name === memberName);
-    return m ? String(m.state) === String(expectedState) : false;
-  }
-
-  // ── Per-type test methods ──────────────────────────────────────────────────
-
-  async testSwitch(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Switch")) return false;
-    if (!ItemTester.isValidSwitchValue(command)) {
-      console.error(`Invalid Switch command '${command}'. Use ON or OFF.`); return false;
-    }
-    return this._runTest(itemName, "Switch", command, expectedState, timeoutSec);
-  }
-
-  async testContact(itemName, update = null, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Contact")) return false;
-    if (update && !ItemTester.isValidContactValue(update)) {
-      console.error(`Invalid Contact update '${update}'. Use OPEN or CLOSED.`); return false;
-    }
-    return this._runTest(itemName, "Contact", update, expectedState, timeoutSec);
-  }
-
-  async testColor(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Color")) return false;
-    if (!ItemTester.isValidColorValue(command)) {
-      console.error(`Invalid Color command '${command}'.`); return false;
-    }
-    return this._runTest(itemName, "Color", command, expectedState, timeoutSec);
-  }
-
-  async testDimmer(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Dimmer")) return false;
-    if (!ItemTester.isValidDimmerValue(command)) {
-      console.error(`Invalid Dimmer command '${command}'.`); return false;
-    }
-    return this._runTest(itemName, "Dimmer", command, expectedState, timeoutSec);
-  }
-
-  async testRollershutter(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Rollershutter")) return false;
-    if (!ItemTester.isValidRollershutterValue(command)) {
-      console.error(`Invalid Rollershutter command '${command}'.`); return false;
-    }
-    return this._runTest(itemName, "Rollershutter", command, expectedState, timeoutSec);
-  }
-
-  async testNumber(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Number")) return false;
-    if (!ItemTester.isValidNumberValue(command)) {
-      console.error(`Invalid Number command '${command}'.`); return false;
-    }
-    return this._runTest(itemName, "Number", command, expectedState, timeoutSec);
-  }
-
-  async testPlayer(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Player")) return false;
-    if (!ItemTester.isValidPlayerValue(command)) {
-      console.error(`Invalid Player command '${command}'.`); return false;
-    }
-    return this._runTest(itemName, "Player", command, expectedState, timeoutSec);
-  }
-
-  async testDateTime(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "DateTime")) return false;
-    if (!ItemTester.isValidDateTimeValue(command)) {
-      console.error(`Invalid DateTime command '${command}'. Use ISO-8601.`); return false;
-    }
-    return this._runTest(itemName, "DateTime", command, expectedState, timeoutSec);
-  }
-
-  async testLocation(itemName, update, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Location")) return false;
-    if (!ItemTester.isValidLocationValue(update)) {
-      console.error(`Invalid Location update '${update}'.`); return false;
-    }
-    return this._runTest(itemName, "Location", update, expectedState, timeoutSec);
-  }
-
-  async testImage(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "Image")) return false;
-    if (!ItemTester.isValidImageValue(command)) {
-      console.error(`Invalid Image command '${command}'.`); return false;
-    }
-    return this._runTest(itemName, "Image", command, expectedState, timeoutSec);
-  }
-
-  async testString(itemName, command, expectedState = null, timeoutSec = 10) {
-    if (!await this.checkItemIsType(itemName, "String")) return false;
-    if (command == null) {
-      console.error("Command for String item must not be null."); return false;
-    }
-    return this._runTest(itemName, "String", command, expectedState, timeoutSec);
-  }
-
-  // ── Private core ───────────────────────────────────────────────────────────
-
-  async _runTest(itemName, itemType, commandOrUpdate, expectedState, timeoutSec) {
-    let initialState = null;
-    let result       = false;
-    const isUpdateOnly = ["Contact","Location"].includes(itemType);
-
-    try {
-      if (commandOrUpdate != null) {
-        try { initialState = await this._items.getItemState(itemName); }
-        catch { console.warn(`Warning: could not read initial state of '${itemName}'.`); }
+    /** itemType: "Number" (base type) or "Number:Temperature" (with dimension) */
+    async checkItemIsType(itemName, itemType) {
+      if (!VALID_TYPES.includes(String(itemType).split(":")[0])) {
+        console.error(`Error: '${itemType}' is not a valid item type.`);
+        return false;
       }
-
-      // Open SSE before sending so we don't miss the event
-      const response = await this._itemEvents.ItemStateChangedEvent(itemName);
-      const reader   = response.body.getReader();
-      const decoder  = new TextDecoder();
-
-      // Send command / update
-      if (commandOrUpdate != null) {
-        if (isUpdateOnly) await this._items.postUpdate(itemName, commandOrUpdate);
-        else              await this._items.sendCommand(itemName, commandOrUpdate);
+      const result = await this.itemsAPI.getItem(itemName);
+      if (isError(result)) {
+        console.error(`Error: The item '${itemName}' could not be found.`);
+        return false;
       }
+      const actualType = asObject(result).type || "";
+      if (actualType.split(":")[0] === itemType || actualType === itemType) return true;
+      console.error(`Error: The item '${itemName}' is not of type '${itemType}'! Found type: '${actualType}'`);
+      return false;
+    }
 
-      if (expectedState == null) {
-        result = true;
-        reader.cancel();
-      } else {
-        // Read SSE stream with timeout
-        const deadline = Date.now() + timeoutSec * 1000;
-        let   buf      = "";
-        outer: while (Date.now() < deadline) {
-          const timeout   = new Promise(r => setTimeout(() => r({ done: true }), 500));
-          const { done, value } = await Promise.race([reader.read(), timeout]);
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          for (const line of buf.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            buf = "";
-            try {
-              const event   = JSON.parse(line.slice(6));
-              if (event.type !== "ItemStateChangedEvent") continue;
-              const payload = JSON.parse(event.payload);
-              if (String(payload.value) === String(expectedState)) {
-                console.log(`OK: '${itemName}' reached state '${payload.value}'.`);
-                result = true;
-                reader.cancel();
-                break outer;
-              }
-            } catch { /* malformed event */ }
+    async checkItemHasState(itemName, state) {
+      const current = await this.itemsAPI.getItemState(itemName);
+      if (isError(current) || current === null || current === undefined) {
+        console.error(`Error: Could not retrieve the state for item '${itemName}'.`);
+        return false;
+      }
+      return String(current) === String(state);
+    }
+
+    async isGroupItem(itemName) {
+      return this.checkItemIsType(itemName, "Group");
+    }
+
+    async getGroupMembers(groupName) {
+      const group = asObject(await this.itemsAPI.getItem(groupName, { recursive: true }));
+      return Array.isArray(group.members) ? group.members : [];
+    }
+
+    async doesGroupContainMember(groupName, memberName) {
+      return (await this.getGroupMembers(groupName)).some(m => m.name === memberName);
+    }
+
+    async checkGroupMemberState(groupName, memberName, expectedState) {
+      const member = (await this.getGroupMembers(groupName)).find(m => m.name === memberName);
+      return member ? String(member.state) === String(expectedState) : false;
+    }
+
+    // ── Tests per item type ──────────────────────────────────────────────────
+    // Each test sends a command (or an update for Contact and Location), waits
+    // up to `timeout` seconds for the expected state and restores the previous
+    // state afterwards. expectedState may also be an array of accepted states.
+
+    async _typedTest(itemName, itemType, value, valid, hint, expectedState, timeout) {
+      if (!await this.checkItemIsType(itemName, itemType)) {
+        console.error(`Test failed: '${itemName}' is not of type '${itemType}'.`);
+        return false;
+      }
+      if (!valid) {
+        console.error(`Test failed: '${value}' is not a valid ${itemType} value. ${hint}`);
+        return false;
+      }
+      return this._testItem(itemName, itemType, value, expectedState, timeout);
+    }
+
+    testColor(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Color", command, ItemTester.isValidColorValue(command),
+        "Use ON, OFF, INCREASE, DECREASE, or 'H,S,B' (e.g. '240,100,100').", expectedState, timeout);
+    }
+
+    testContact(itemName, update = null, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Contact", update,
+        update === null || ItemTester.isValidContactValue(update), "Use OPEN or CLOSED.", expectedState, timeout);
+    }
+
+    testDateTime(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "DateTime", command, ItemTester.isValidDateTimeValue(command),
+        "Use ISO 8601, e.g. '2024-01-15T08:30:00+0000'.", expectedState, timeout);
+    }
+
+    testDimmer(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Dimmer", command === null ? null : String(command),
+        ItemTester.isValidDimmerValue(command),
+        "Use ON, OFF, INCREASE, DECREASE, or a percentage between 0 and 100.", expectedState, timeout);
+    }
+
+    testImage(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Image", command, ItemTester.isValidImageValue(command),
+        "Use an http/https URL or a data URI (data:image/...;base64,...).", expectedState, timeout);
+    }
+
+    testLocation(itemName, update, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Location", update, ItemTester.isValidLocationValue(update),
+        "Use 'lat,lon' or 'lat,lon,alt', e.g. '48.7758,9.1829'.", expectedState, timeout);
+    }
+
+    testNumber(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Number", command === null ? null : String(command),
+        ItemTester.isValidNumberValue(command),
+        "Use a number, optionally with a unit (e.g. '20', '20.5', '20 °C').", expectedState, timeout);
+    }
+
+    testPlayer(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Player", command, ItemTester.isValidPlayerValue(command),
+        "Use PLAY, PAUSE, NEXT, PREVIOUS, REWIND, or FASTFORWARD.", expectedState, timeout);
+    }
+
+    testRollershutter(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Rollershutter", command === null ? null : String(command),
+        ItemTester.isValidRollershutterValue(command),
+        "Use UP, DOWN, STOP, MOVE, or a percentage between 0 and 100.", expectedState, timeout);
+    }
+
+    testString(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "String", command, ItemTester.isValidStringValue(command),
+        "The command must not be null.", expectedState, timeout);
+    }
+
+    testSwitch(itemName, command, expectedState = null, timeout = 10) {
+      return this._typedTest(itemName, "Switch", command, ItemTester.isValidSwitchValue(command),
+        "Use ON or OFF.", expectedState, timeout);
+    }
+
+    // ── Core ─────────────────────────────────────────────────────────────────
+
+    async _testItem(itemName, itemType, commandOrUpdate = null, expectedState = null, timeout = 10) {
+      const isUpdate = itemType === "Contact" || itemType === "Location";
+      let initialState = null;
+      let stream = null;
+      let timer = null;
+      try {
+        if (commandOrUpdate !== null && commandOrUpdate !== undefined) {
+          const state = await this.itemsAPI.getItemState(itemName);
+          if (isError(state)) console.warn(`Warning: Could not retrieve initial state for item '${itemName}'.`);
+          else initialState = state;
+        }
+
+        // open the stream before sending, so that no event is missed
+        stream = await this.itemEventsAPI.ItemStateChangedEvent(itemName);
+        if (isError(stream)) {
+          console.error(`Error: No event stream for item '${itemName}': ${stream.error}`);
+          return false;
+        }
+
+        if (commandOrUpdate !== null && commandOrUpdate !== undefined) {
+          const sent = isUpdate
+            ? await this.itemsAPI.postUpdate(itemName, String(commandOrUpdate))
+            : await this.itemsAPI.sendCommand(itemName, String(commandOrUpdate));
+          if (isError(sent)) {
+            console.error(`Error: '${commandOrUpdate}' was rejected for '${itemName}': ${sent.error}`);
+            return false;
           }
         }
-        if (!result) {
-          reader.cancel();
-          result = await this.checkItemHasState(itemName, expectedState);
-          if (!result)
-            console.error(
-              `Error: state of '${itemName}' is not '${expectedState}' after ${timeoutSec}s.`);
-        }
+
+        if (expectedState === null || expectedState === undefined) return true;
+
+        // if the state does not change at all, the check after the timeout decides
+        let reached = false;
+        timer = setTimeout(() => stream.abort(), timeout * 1000);
+        try {
+          for await (const event of iterSSEEvents(stream)) {
+            if (event.type !== "ItemStateChangedEvent") continue;
+            if (matches(event.payload && event.payload.value, expectedState)) {
+              console.log(`Success: '${itemName}' reached state '${event.payload.value}'.`);
+              reached = true;
+              break;
+            }
+          }
+        } catch { /* aborted after timeout */ }
+        if (reached) return true;
+        return this._checkFinalState(itemName, expectedState);
+      } catch (err) {
+        console.error(`Error testing '${itemName}': ${err.message}`);
+        return false;
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (stream && typeof stream.abort === "function") stream.abort();
+        await this._resetItem(itemName, itemType, initialState);
       }
-    } catch (e) {
-      console.error(`Error testing '${itemName}': ${e.message}`);
-    } finally {
-      await this._resetItem(itemName, itemType, initialState);
     }
-    return result;
-  }
 
-  async _resetItem(itemName, itemType, initialState) {
-    if (initialState == null) return;
-    try {
-      if (["Contact","Location"].includes(itemType))
-        await this._items.postUpdate(itemName, initialState);
-      else
-        await this._items.sendCommand(itemName, initialState);
-    } catch (e) {
-      console.warn(`Warning: could not reset '${itemName}' to '${initialState}': ${e.message}`);
+    async _resetItem(itemName, itemType, initialState) {
+      if (initialState === null || initialState === undefined) return;
+      // NULL/UNDEF are no valid commands – restore them as state
+      const asUpdate = itemType === "Contact" || itemType === "Location" ||
+                       initialState === "NULL" || initialState === "UNDEF";
+      const result = asUpdate
+        ? await this.itemsAPI.postUpdate(itemName, initialState)
+        : await this.itemsAPI.sendCommand(itemName, initialState);
+      if (isError(result)) {
+        console.warn(`Warning: Could not reset item '${itemName}' to '${initialState}': ${result.error}`);
+      }
     }
-  }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ThingTester
-// ─────────────────────────────────────────────────────────────────────────────
-
-class ThingTester {
-  constructor(client) { this._things = new Things(client); }
-
-  async getThingStatus(thingUID) {
-    try {
-      const thing = await _parseResponse(this._things.getThing(thingUID));
-      return thing?.statusInfo?.status ?? "UNKNOWN";
-    } catch (e) {
-      console.error(`Error reading status of '${thingUID}': ${e.message}`);
-      return "UNKNOWN";
-    }
-  }
-
-  async isThingStatus(thingUID, status) {
-    return (await this.getThingStatus(thingUID)) === status;
-  }
-
-  async isThingOnline(uid)        { return this.isThingStatus(uid, "ONLINE"); }
-  async isThingOffline(uid)       { return this.isThingStatus(uid, "OFFLINE"); }
-  async isThingPending(uid)       { return this.isThingStatus(uid, "PENDING"); }
-  async isThingUnknown(uid)       { return this.isThingStatus(uid, "UNKNOWN"); }
-  async isThingUninitialized(uid) { return this.isThingStatus(uid, "UNINITIALIZED"); }
-  async isThingError(uid)         { return this.isThingStatus(uid, "ERROR"); }
-
-  async enableThing(thingUID) {
-    try {
-      await this._things.enableThing(thingUID);
-      console.log(`Thing '${thingUID}' enabled successfully.`);
-      return true;
-    } catch (e) {
-      console.error(`Error enabling '${thingUID}': ${e.message}`);
+    async _checkFinalState(itemName, expectedState) {
+      const accepted = expectedState instanceof Set ? [...expectedState]
+        : Array.isArray(expectedState) ? expectedState : [expectedState];
+      for (const state of accepted) {
+        if (await this.checkItemHasState(itemName, state)) return true;
+      }
+      console.error(`Error: After fallback, state of '${itemName}' is not ${
+        accepted.length > 1 ? `in [${accepted.join(", ")}]` : `'${accepted[0]}'`}.`);
       return false;
     }
   }
 
-  async disableThing(thingUID) {
-    try {
-      await this._things.disableThing(thingUID);
-      console.log(`Thing '${thingUID}' disabled successfully.`);
-      return true;
-    } catch (e) {
-      console.error(`Error disabling '${thingUID}': ${e.message}`);
-      return false;
+  // Python names of the validators (static, with leading underscore)
+  for (const name of Object.getOwnPropertyNames(ItemTester)) {
+    if (name.startsWith("isValid")) ItemTester["_" + name] = ItemTester[name];
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ThingTester
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  class ThingTester {
+    constructor(client) {
+      this.client = client;
+      this.thingsAPI = new Things(client);
     }
+
+    /** Status of a thing ("ONLINE", "OFFLINE", …) or "UNKNOWN" if it cannot be determined. */
+    async getThingStatus(thingUID) {
+      const thing = asObject(await this.thingsAPI.getThing(thingUID));
+      return (thing.statusInfo && thing.statusInfo.status) || "UNKNOWN";
+    }
+
+    async _getThingStatus(thingUID) {
+      return this.getThingStatus(thingUID);
+    }
+
+    async isThingStatus(thingUID, statusToCheck) {
+      return (await this.getThingStatus(thingUID)) === statusToCheck;
+    }
+
+    isThingOnline(thingUID) { return this.isThingStatus(thingUID, "ONLINE"); }
+    isThingOffline(thingUID) { return this.isThingStatus(thingUID, "OFFLINE"); }
+    isThingPending(thingUID) { return this.isThingStatus(thingUID, "PENDING"); }
+    isThingUnknown(thingUID) { return this.isThingStatus(thingUID, "UNKNOWN"); }
+    isThingUninitialized(thingUID) { return this.isThingStatus(thingUID, "UNINITIALIZED"); }
+    isThingError(thingUID) { return this.isThingStatus(thingUID, "ERROR"); }
+
+    async _setEnabled(thingUID, enabled) {
+      const result = await this.thingsAPI.setThingStatus(thingUID, enabled);
+      const verb = enabled ? "enabled" : "disabled";
+      if (isError(result)) {
+        console.error(`Error ${enabled ? "enabling" : "disabling"} thing ${thingUID}: ${result.error}`);
+        return false;
+      }
+      console.log(`Thing ${thingUID} was successfully ${verb}.`);
+      return true;
+    }
+
+    enableThing(thingUID) { return this._setEnabled(thingUID, true); }
+    disableThing(thingUID) { return this._setEnabled(thingUID, false); }
   }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// RuleTester
-// ─────────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
+  // RuleTester
+  // ─────────────────────────────────────────────────────────────────────────────
 
-class RuleTester {
-  constructor(client) {
-    this._rules = new Rules(client);
-    this._items = new Items(client);
-  }
+  class RuleTester {
+    constructor(client) {
+      this.client = client;
+      this.rulesAPI = new Rules(client);
+      this.itemsAPI = new Items(client);
+    }
 
-  async getRuleStatus(ruleUID) {
-    try {
-      const rule = await _parseResponse(this._rules.getRule(ruleUID));
-      if (rule?.status) return {
-        status:       rule.status.status       ?? "UNKNOWN",
-        statusDetail: rule.status.statusDetail ?? "UNKNOWN",
-        editable:     rule.editable            ?? false,
-        name:         rule.name                ?? "",
-        uid:          rule.uid                 ?? "",
+    async _getRule(ruleUID) {
+      const rule = asObject(await this.rulesAPI.getRule(ruleUID));
+      if (!rule.status) {
+        console.error(`Error retrieving the status of rule ${ruleUID}.`);
+        return null;
+      }
+      return rule;
+    }
+
+    async runRule(ruleUID, contextData = null) {
+      if (await this.isRuleDisabled(ruleUID)) {
+        console.error(`Error: Rule ${ruleUID} could not be executed because it is disabled.`);
+        return false;
+      }
+      const result = await this.rulesAPI.runNow(ruleUID, contextData);
+      if (isError(result)) {
+        console.error(`Error executing rule ${ruleUID}: ${result.error}`);
+        return false;
+      }
+      console.log(`Rule ${ruleUID} executed successfully.`);
+      return true;
+    }
+
+    async enableRule(ruleUID) {
+      const result = await this.rulesAPI.enable(ruleUID);
+      if (isError(result)) {
+        console.error(`Error enabling rule ${ruleUID}: ${result.error}`);
+        return false;
+      }
+      console.log(`Rule ${ruleUID} enabled successfully.`);
+      return true;
+    }
+
+    async disableRule(ruleUID) {
+      const result = await this.rulesAPI.disable(ruleUID);
+      if (isError(result)) {
+        console.error(`Error disabling rule ${ruleUID}: ${result.error}`);
+        return false;
+      }
+      console.log(`Rule ${ruleUID} disabled successfully.`);
+      return true;
+    }
+
+    /**
+     * Runs a rule and checks afterwards whether an item has the expected value.
+     * @param waitSeconds  time the rule gets before the check (default 2, as in Python)
+     */
+    async testRuleExecution(ruleUID, expectedItem, expectedValue, waitSeconds = 2) {
+      if (!await this.runRule(ruleUID)) {
+        console.error(`Error: Rule ${ruleUID} could not be executed.`);
+        return false;
+      }
+      await sleep(waitSeconds * 1000);
+      const state = await this.itemsAPI.getItemState(expectedItem);
+      if (isError(state) || String(state) !== String(expectedValue)) {
+        console.error(`Error: State of item ${expectedItem} after rule execution does not match. ` +
+          `Expected: ${expectedValue}, Found: ${isError(state) ? state.error : state}`);
+        return false;
+      }
+      console.log(`${expectedItem} state after rule execution: ${state}`);
+      return true;
+    }
+
+    async isRuleActive(ruleUID) {
+      const rule = await this._getRule(ruleUID);
+      if (!rule) return false;
+      console.log(`Rule status: ${rule.status.status}`);
+      return rule.status.status !== "UNINITIALIZED";
+    }
+
+    async isRuleDisabled(ruleUID) {
+      const rule = await this._getRule(ruleUID);
+      if (!rule) return false;
+      console.log(`Rule status: ${rule.status.status}, Detail: ${rule.status.statusDetail}`);
+      return rule.status.status === "UNINITIALIZED" && rule.status.statusDetail === "DISABLED";
+    }
+
+    async isRuleRunning(ruleUID) {
+      const rule = await this._getRule(ruleUID);
+      if (!rule) return false;
+      console.log(`Rule status: ${rule.status.status}`);
+      return rule.status.status === "RUNNING";
+    }
+
+    async isRuleIdle(ruleUID) {
+      const rule = await this._getRule(ruleUID);
+      if (!rule) return false;
+      console.log(`Rule status: ${rule.status.status}`);
+      return rule.status.status === "IDLE";
+    }
+
+    /** { status, statusDetail, editable, name, uid } or {} */
+    async getRuleStatus(ruleUID) {
+      const rule = await this._getRule(ruleUID);
+      if (!rule) return {};
+      return {
+        status: rule.status.status || "UNKNOWN",
+        statusDetail: rule.status.statusDetail || "UNKNOWN",
+        editable: rule.editable ?? false,
+        name: rule.name || "",
+        uid: rule.uid || "",
       };
-    } catch (e) {
-      console.error(`Error reading status of rule '${ruleUID}': ${e.message}`);
-    }
-    return {};
-  }
-
-  async isRuleActive(ruleUID)   { return (await this.getRuleStatus(ruleUID)).status !== "UNINITIALIZED"; }
-  async isRuleDisabled(ruleUID) {
-    const s = await this.getRuleStatus(ruleUID);
-    return s.status === "UNINITIALIZED" && s.statusDetail === "DISABLED";
-  }
-  async isRuleRunning(ruleUID)  { return (await this.getRuleStatus(ruleUID)).status === "RUNNING"; }
-  async isRuleIdle(ruleUID)     { return (await this.getRuleStatus(ruleUID)).status === "IDLE"; }
-
-  async enableRule(ruleUID) {
-    try {
-      await this._rules.enable(ruleUID);
-      console.log(`Rule '${ruleUID}' enabled successfully.`);
-      return true;
-    } catch (e) {
-      console.error(`Error enabling rule '${ruleUID}': ${e.message}`);
-      return false;
     }
   }
 
-  async disableRule(ruleUID) {
-    try {
-      await this._rules.disable(ruleUID);
-      console.log(`Rule '${ruleUID}' disabled successfully.`);
-      return true;
-    } catch (e) {
-      console.error(`Error disabling rule '${ruleUID}': ${e.message}`);
-      return false;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // ChannelTester
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  class ChannelTester {
+    constructor(client) {
+      this.client = client;
+      this.links = new Links(client);
+    }
+
+    async isItemLinkedToChannel(itemName, channelUID) {
+      return asObject(await this.links.getLink(itemName, channelUID)).itemName === itemName;
+    }
+
+    async getLinksForItem(itemName) {
+      return asList(await this.links.getLinks(null, itemName));
+    }
+
+    async hasOrphanedLinks() {
+      return asList(await this.links.getOrphanLinks()).length > 0;
+    }
+
+    async isItemLinkedToAnyChannel(itemName) {
+      return (await this.getLinksForItem(itemName)).length > 0;
     }
   }
 
-  async runRule(ruleUID, contextData = null) {
-    if (await this.isRuleDisabled(ruleUID)) {
-      console.error(`Error: Rule '${ruleUID}' is disabled.`);
-      return false;
+  // ─────────────────────────────────────────────────────────────────────────────
+  // PersistenceTester
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  class PersistenceTester {
+    constructor(client) {
+      this.client = client;
+      this.persistence = new Persistence(client);
     }
-    try {
-      await this._rules.runNow(ruleUID, contextData);
-      console.log(`Rule '${ruleUID}' executed successfully.`);
-      return true;
-    } catch (e) {
-      console.error(`Error executing rule '${ruleUID}': ${e.message}`);
-      return false;
+
+    async isItemPersisted(serviceID, itemName) {
+      return asList(await this.persistence.getItemsFromService(serviceID))
+        .some(entry => (entry && typeof entry === "object" ? entry.name : entry) === itemName);
     }
-  }
 
-  async testRuleExecution(ruleUID, expectedItem, expectedValue) {
-    if (!await this.runRule(ruleUID)) return false;
-    await new Promise(r => setTimeout(r, 2000));
-    try {
-      const state = await this._items.getItemState(expectedItem);
-      if (String(state) === String(expectedValue)) {
-        console.log(`OK: item '${expectedItem}' = '${state}'.`);
-        return true;
-      }
-      console.error(`Error: '${expectedItem}' expected '${expectedValue}', found '${state}'.`);
-      return false;
-    } catch (e) {
-      console.error(`Error reading state of '${expectedItem}': ${e.message}`);
-      return false;
+    /** startTime/endTime as ISO 8601 strings or Date objects */
+    async hasDataInRange(serviceID, itemName, startTime, endTime) {
+      const iso = t => (t instanceof Date ? t.toISOString() : t);
+      const data = asObject(await this.persistence.getItemPersistenceData(itemName, serviceID,
+        { startTime: iso(startTime), endTime: iso(endTime) }));
+      return Array.isArray(data.data) && data.data.length > 0;
     }
-  }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ChannelTester
-// ─────────────────────────────────────────────────────────────────────────────
-
-class ChannelTester {
-  constructor(client) { this._links = new Links(client); }
-
-  async isItemLinkedToChannel(itemName, channelUID) {
-    try {
-      const link = await _parseResponse(this._links.getLink(itemName, channelUID));
-      return link?.itemName === itemName;
-    } catch (e) {
-      console.error(`Error checking link '${itemName}' → '${channelUID}': ${e.message}`);
-      return false;
-    }
-  }
-
-  async getLinksForItem(itemName) {
-    try {
-      const raw = await _parseResponse(this._links.getLinks(null, itemName));
-      return Array.isArray(raw) ? raw : [];
-    } catch (e) {
-      console.error(`Error reading links for '${itemName}': ${e.message}`);
-      return [];
-    }
-  }
-
-  async isItemLinkedToAnyChannel(itemName) {
-    return (await this.getLinksForItem(itemName)).length > 0;
-  }
-
-  async hasOrphanedLinks() {
-    try {
-      const raw = await _parseResponse(this._links.getOrphanLinks());
-      return Array.isArray(raw) && raw.length > 0;
-    } catch (e) {
-      console.error(`Error reading orphan links: ${e.message}`);
-      return false;
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PersistenceTester
-// ─────────────────────────────────────────────────────────────────────────────
-
-class PersistenceTester {
-  constructor(client) { this._persistence = new Persistence(client); }
-
-  async isItemPersisted(serviceId, itemName) {
-    try {
-      const raw  = await _parseResponse(
-        this._persistence.getItemsFromService(serviceId));
-      const list = Array.isArray(raw) ? raw : [];
-      return list.some(e =>
-        (typeof e === "object" ? e.name : e) === itemName);
-    } catch (e) {
-      console.error(`Error checking persistence for '${itemName}': ${e.message}`);
-      return false;
-    }
-  }
-
-  async hasDataInRange(serviceId, itemName, startTime, endTime) {
-    try {
-      const raw  = await _parseResponse(
-        this._persistence.getItemPersistenceData(itemName, serviceId,
-          startTime, endTime));
-      return Array.isArray(raw?.data) && raw.data.length > 0;
-    } catch (e) {
-      console.error(`Error reading persistence data for '${itemName}': ${e.message}`);
-      return false;
-    }
-  }
-
-  async checkLastPersistedState(serviceId, itemName, expectedState) {
-    try {
-      const raw     = await _parseResponse(
-        this._persistence.getItemPersistenceData(itemName, serviceId));
-      const entries = raw?.data;
-      if (!Array.isArray(entries) || entries.length === 0) return false;
+    async checkLastPersistedState(serviceID, itemName, expectedState) {
+      const data = asObject(await this.persistence.getItemPersistenceData(itemName, serviceID));
+      const entries = Array.isArray(data.data) ? data.data : [];
+      if (!entries.length) return false;
       return String(entries[entries.length - 1].state) === String(expectedState);
-    } catch (e) {
-      console.error(
-        `Error reading last persisted state for '${itemName}': ${e.message}`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // SitemapTester
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  class SitemapTester {
+    constructor(client) {
+      this.client = client;
+      this.sitemaps = new Sitemaps(client);
+    }
+
+    async doesSitemapExist(sitemapName) {
+      return asList(await this.sitemaps.getSitemaps()).some(s => s.name === sitemapName);
+    }
+
+    async doesSitemapContainItem(sitemapName, itemName) {
+      return this._searchForItem(asObject(await this.sitemaps.getSitemap(sitemapName)), itemName);
+    }
+
+    _searchForItem(node, itemName) {
+      if (Array.isArray(node)) return node.some(element => this._searchForItem(element, itemName));
+      if (node && typeof node === "object") {
+        if (node.item && node.item.name === itemName) return true;
+        return Object.values(node).some(value => this._searchForItem(value, itemName));
+      }
       return false;
     }
   }
+
+  return { ItemTester, ThingTester, RuleTester, ChannelTester, PersistenceTester, SitemapTester };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SitemapTester
-// ─────────────────────────────────────────────────────────────────────────────
-
-class SitemapTester {
-  constructor(client) { this._sitemaps = new Sitemaps(client); }
-
-  async doesSitemapExist(sitemapName) {
-    try {
-      const raw  = await _parseResponse(this._sitemaps.getSitemaps());
-      const list = Array.isArray(raw) ? raw : [];
-      return list.some(s => s.name === sitemapName);
-    } catch (e) {
-      console.error(`Error reading sitemaps: ${e.message}`);
-      return false;
-    }
-  }
-
-  async doesSitemapContainItem(sitemapName, itemName) {
-    try {
-      const raw = await _parseResponse(this._sitemaps.getSitemap(sitemapName));
-      return this._searchForItem(raw, itemName);
-    } catch (e) {
-      console.error(`Error reading sitemap '${sitemapName}': ${e.message}`);
-      return false;
-    }
-  }
-
-  _searchForItem(node, itemName) {
-    if (!node) return false;
-    if (typeof node === "object") {
-      if (node.item?.name === itemName) return true;
-      return Object.values(node).some(v => this._searchForItem(v, itemName));
-    }
-    if (Array.isArray(node)) {
-      return node.some(el => this._searchForItem(el, itemName));
-    }
-    return false;
-  }
+if (typeof window.openHAB === "undefined") {
+  throw new Error("js-openhab-test-suite: load js-openhab-rest-client (openhab.js) first");
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Export (browser global + CommonJS + ESM)
-// ─────────────────────────────────────────────────────────────────────────────
+const openHABTestSuite = createTestSuite(window.openHAB);
+window.openHABTestSuite = openHABTestSuite;
 
-const openHABTestSuite = {
-  ItemTester, ThingTester, RuleTester,
-  ChannelTester, PersistenceTester, SitemapTester,
-};
-
-if (typeof window !== "undefined") window.openHABTestSuite = openHABTestSuite;
-if (typeof module !== "undefined" && module.exports) module.exports = openHABTestSuite;
-if (typeof exports !== "undefined") Object.assign(exports, openHABTestSuite);
+// Global names as in 1.x (new ItemTester(client)) – unless the page already uses them
+for (const [name, cls] of Object.entries(openHABTestSuite)) {
+  if (!(name in window)) window[name] = cls;
+}
+})();
